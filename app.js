@@ -108,9 +108,12 @@ async function connectDevice() {
     return;
   }
   try {
-    setStatus("busy", "正在选择设备");
+    setStatus("busy", "请在列表选择 Force-XXXX");
     const device = await navigator.bluetooth.requestDevice({
-      filters: [{ namePrefix: "Force-" }],
+      // Bluefy on iOS can miss devices when requestDevice uses a namePrefix
+      // filter, even though the same peripheral is visible to native apps.
+      // Show every nearby BLE peripheral and let the user choose Force-XXXX.
+      acceptAllDevices: true,
       optionalServices: [REXFORCE.SERVICE_UUID],
     });
     device.addEventListener("gattserverdisconnected", onDisconnected);
@@ -134,7 +137,10 @@ async function connectDevice() {
     if (error.name === "NotFoundError") setStatus("idle", "未选择设备");
     else {
       setStatus("error", "连接失败");
-      showToast(error.message || "连接失败", "error");
+      const message = error.name === "NotSupportedError"
+        ? "所选设备没有 RexForce 服务，请选择 Force-XXXX"
+        : (error.message || "连接失败");
+      showToast(message, "error");
     }
   }
 }
