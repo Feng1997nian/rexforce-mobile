@@ -62,7 +62,7 @@
       <div class="chart-footer"><span>最近 6 秒</span><span class="chart-legend" id="dualChartLegend" hidden><i class="left-dot"></i>左脚 <i class="right-dot"></i>右脚 <i class="total-dot"></i>合力</span><span>数据有效率 <b id="validRate">—</b></span></div>
     </section>
 
-    <div class="utility-row"><button class="ghost-action" id="demoBtn">启动演示</button><button class="ghost-action" id="exportBtn">导出当前 CSV</button></div>
+    <div class="utility-row single"><button class="export-action" id="exportBtn">导出结果</button></div>
 
     <section class="history-card">
       <div class="section-head"><h2>最近测试</h2><span class="pill" id="elapsedValue">0.0 s</span></div>
@@ -79,7 +79,18 @@
       <div class="setting-row"><label><span>反转方向</span><small>拉力与压力方向相反时使用</small></label><label class="switch"><input id="invertToggle" type="checkbox"><i></i></label></div>
       <div class="setting-row" id="dualSettingsRow" hidden><label><span>主副设备左右互换</span><small>默认主设备为左脚、副设备为右脚</small></label><label class="switch"><input id="swapSidesToggle" type="checkbox"><i></i></label></div>
       <section class="calibration"><h3>标准砝码校准</h3><p>请先让设备自动归零，再放置接近常用测试范围的标准砝码。校准会写入主板并持久保存。</p><div class="input-pair"><label>当前显示值 (kg)<input id="calMeasured" type="number" inputmode="decimal" step="0.01" placeholder="例如 10.32"></label><label>标准重量 (kg)<input id="calReference" type="number" inputmode="decimal" step="0.01" placeholder="例如 10.00"></label></div><div class="stack"><button class="primary-action" id="calibrateBtn">发送校准因子</button><button class="secondary-action" id="temperatureBtn">读取温度原始值</button><button class="secondary-action" id="resetFactorBtn">恢复默认比例系数</button></div></section>
+      <section class="diagnostics"><h3>设备诊断</h3><p>演示数据仅用于检查界面、曲线和指标计算，不会连接测力台。</p><button class="secondary-action" id="demoBtn">启动演示数据</button></section>
       <div class="stack"><button class="danger-action" id="disconnectBtn">断开设备</button></div>
+    </div>
+  </dialog>
+  <dialog id="exportDialog">
+    <div class="dialog-head"><div><small class="dialog-kicker">最近一次测试</small><h2>导出结果</h2></div><button class="icon-button" id="closeExport" aria-label="关闭导出">×</button></div>
+    <div class="settings-body">
+      <p class="export-intro" id="exportHint">生成包含核心指标和完整力—时间曲线的训练报告。</p>
+      <div class="export-options">
+        <button class="export-option image" id="exportImageBtn"><span class="export-icon">▧</span><span><strong>保存结果图片</strong><small>适合相册保存与微信分享</small></span></button>
+        <button class="export-option csv" id="exportCsvBtn"><span class="export-icon">CSV</span><span><strong>导出原始 CSV</strong><small>适合 Excel 和进一步分析</small></span></button>
+      </div>
     </div>
   </dialog>
   <div class="toast" id="toast" role="status"></div>

@@ -8,6 +8,8 @@ const els = {
   deviceName: $("#deviceName"), forceLabel: $("#forceLabel"), value: $("#forceValue"), unit: $("#forceUnit"), peak: $("#peakValue"),
   mean: $("#meanValue"), impulse: $("#impulseValue"), rfd: $("#rfdValue"), elapsed: $("#elapsedValue"),
   start: $("#startBtn"), tare: $("#tareBtn"), export: $("#exportBtn"), canvas: $("#forceChart"),
+  exportDialog: $("#exportDialog"), closeExport: $("#closeExport"), exportHint: $("#exportHint"),
+  exportImage: $("#exportImageBtn"), exportCsv: $("#exportCsvBtn"),
   sessions: $("#sessionList"), emptySessions: $("#emptySessions"), mode: $("#modeBadge"), samples: $("#sampleBadge"),
   validRate: $("#validRate"), invert: $("#invertToggle"), filter: $("#filterSelect"), unitSelect: $("#unitSelect"),
   dualPanel: $("#dualPanel"), leftValue: $("#leftForceValue"), rightValue: $("#rightForceValue"),
@@ -31,6 +33,7 @@ const state = {
   lastFilterTs: null, raf: null, demoTimer: null, demoTs: 0,
   currentMode: "single", selectedMode: localStorage.getItem("rexforce.mode.v1") === "dual" ? "dual" : "single",
   temperatureRaw: null, hasReceivedData: false, lastUiTs: 0,
+  lastCompletedSamples: [], lastCompletedAt: null, lastCompletedMode: "single",
 };
 
 function showToast(message, tone = "normal") {
@@ -237,6 +240,7 @@ function startDemo() {
   state.demoTs = 0;
   state.parser.reset();
   els.deviceName.textContent = "模拟训练数据";
+  els.demo.textContent = "停止演示数据";
   els.demoPill.hidden = false;
   setStatus("demo", "演示模式");
   let phase = 0;
@@ -261,6 +265,7 @@ function stopDemo() {
   if (state.demoTimer) clearInterval(state.demoTimer);
   state.demoTimer = null;
   state.demo = false;
+  els.demo.textContent = "启动演示数据";
 }
 
 function toggleRecording() {
@@ -285,6 +290,9 @@ function finishRecording() {
   els.start.textContent = "开始测试";
   els.start.classList.remove("recording");
   if (state.sessionSamples.length < 2) return;
+  state.lastCompletedSamples = state.sessionSamples.slice();
+  state.lastCompletedAt = new Date();
+  state.lastCompletedMode = state.selectedMode;
   const summary = calculateMetrics(state.sessionSamples);
   const session = {
     id: Date.now(), createdAt: new Date().toISOString(), mode: state.selectedMode,
@@ -298,7 +306,7 @@ function finishRecording() {
   sessions.unshift(session);
   localStorage.setItem("rexforce.sessions.v1", JSON.stringify(sessions.slice(0, 30)));
   renderSessions();
-  showToast("测试已保存到本机");
+  showToast("测试已保存，可导出结果");
 }
 
 function downsample(points, maxPoints) {
@@ -335,19 +343,194 @@ function renderSessions() {
   });
 }
 
+function exportPoints() {
+  if (state.recording && state.sessionSamples.length) return state.sessionSamples;
+  if (state.lastCompletedSamples.length) return state.lastCompletedSamples;
+  return state.samples;
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function exportCsv() {
-  const points = state.recording ? state.sessionSamples : state.samples;
+  const points = exportPoints();
   if (!points.length) return showToast("暂无可导出的数据", "error");
   const rows = ["timestamp_ms,primary_kg,secondary_kg,left_kg,right_kg,total_raw_kg,total_filtered_kg"];
   for (const p of points) rows.push([p.timestampMs, p.primaryKg, p.secondaryKg, p.leftKg ?? p.valueKg, p.rightKg ?? 0, p.rawKg, p.valueKg].join(","));
   const blob = new Blob(["\ufeff" + rows.join("\n")], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `rexforce-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
-  anchor.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  downloadBlob(blob, `rexforce-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`);
+  els.exportDialog.close();
   showToast("CSV 已生成");
+}
+
+function roundedRect(ctx, x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + width, y, x + width, y + height, r);
+  ctx.arcTo(x + width, y + height, x, y + height, r);
+  ctx.arcTo(x, y + height, x, y, r);
+  ctx.arcTo(x, y, x + width, y, r);
+  ctx.closePath();
+}
+
+function drawReportMetric(ctx, x, y, width, label, value, accent) {
+  roundedRect(ctx, x, y, width, 170, 24);
+  ctx.fillStyle = "#0c1b3d";
+  ctx.fill();
+  ctx.fillStyle = accent;
+  ctx.fillRect(x, y, 8, 170);
+  ctx.fillStyle = "#91a8cf";
+  ctx.font = "500 28px system-ui, sans-serif";
+  ctx.fillText(label, x + 34, y + 54);
+  ctx.fillStyle = "#f8fbff";
+  ctx.font = "800 46px system-ui, sans-serif";
+  ctx.fillText(value, x + 34, y + 122);
+}
+
+async function exportResultImage() {
+  const points = exportPoints();
+  if (points.length < 2) return showToast("请先完成一次测试", "error");
+  const summary = calculateMetrics(points);
+  const reportMode = state.recording || !state.lastCompletedSamples.length ? state.selectedMode : state.lastCompletedMode;
+  const reportDate = state.lastCompletedAt || new Date();
+  const canvas = document.createElement("canvas");
+  canvas.width = 1400;
+  canvas.height = reportMode === "dual" ? 1900 : 1740;
+  const ctx = canvas.getContext("2d");
+  const background = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+  background.addColorStop(0, "#061634");
+  background.addColorStop(.58, "#040b1c");
+  background.addColorStop(1, "#240917");
+  ctx.fillStyle = background;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const brandGradient = ctx.createLinearGradient(74, 72, 190, 188);
+  brandGradient.addColorStop(0, "#2f6df6");
+  brandGradient.addColorStop(.48, "#2f6df6");
+  brandGradient.addColorStop(.5, "#ffffff");
+  brandGradient.addColorStop(.55, "#d7193f");
+  brandGradient.addColorStop(1, "#f2385a");
+  roundedRect(ctx, 74, 72, 116, 116, 30);
+  ctx.fillStyle = brandGradient;
+  ctx.fill();
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "900 64px system-ui, sans-serif";
+  ctx.fillText("R", 108, 151);
+  ctx.font = "800 56px system-ui, sans-serif";
+  ctx.fillText("RexForce 测试报告", 226, 127);
+  ctx.fillStyle = "#91a8cf";
+  ctx.font = "400 28px system-ui, sans-serif";
+  ctx.fillText(reportDate.toLocaleString("zh-CN"), 228, 174);
+
+  roundedRect(ctx, 74, 240, 1252, 164, 28);
+  ctx.fillStyle = reportMode === "dual" ? "rgba(215,25,63,.22)" : "rgba(47,109,246,.23)";
+  ctx.fill();
+  ctx.fillStyle = "#91a8cf";
+  ctx.font = "600 26px system-ui, sans-serif";
+  ctx.fillText("测试模式", 112, 292);
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "900 54px system-ui, sans-serif";
+  ctx.fillText(reportMode === "dual" ? "双机 · 左右脚" : "单机力量测试", 112, 363);
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#91a8cf";
+  ctx.font = "500 28px system-ui, sans-serif";
+  ctx.fillText(`持续 ${summary.duration.toFixed(2)} 秒`, 1286, 337);
+  ctx.textAlign = "left";
+
+  const unit = displayUnit();
+  drawReportMetric(ctx, 74, 446, 602, "峰值力", `${displayValue(summary.peak).toFixed(1)} ${unit}`, "#f2385a");
+  drawReportMetric(ctx, 724, 446, 602, "平均力", `${displayValue(summary.mean).toFixed(1)} ${unit}`, "#3977ff");
+  drawReportMetric(ctx, 74, 644, 602, "冲量", `${summary.impulse.toFixed(0)} N·s`, "#3977ff");
+  drawReportMetric(ctx, 724, 644, 602, "最大 RFD", `${summary.rfd.toFixed(0)} N/s`, "#f2385a");
+
+  const chartX = 74;
+  const chartY = 886;
+  const chartWidth = 1252;
+  const chartHeight = 580;
+  roundedRect(ctx, chartX, chartY, chartWidth, chartHeight, 30);
+  ctx.fillStyle = "#091735";
+  ctx.fill();
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "800 36px system-ui, sans-serif";
+  ctx.fillText("力—时间曲线", chartX + 42, chartY + 64);
+  const plotX = chartX + 54;
+  const plotY = chartY + 102;
+  const plotWidth = chartWidth - 108;
+  const plotHeight = chartHeight - 154;
+  ctx.strokeStyle = "rgba(221,232,255,.13)";
+  ctx.lineWidth = 2;
+  for (let i = 0; i <= 4; i += 1) {
+    const y = plotY + (plotHeight * i) / 4;
+    ctx.beginPath(); ctx.moveTo(plotX, y); ctx.lineTo(plotX + plotWidth, y); ctx.stroke();
+  }
+  const reduced = downsample(points, 1000);
+  const startTs = reduced[0].timestampMs;
+  const endTs = Math.max(startTs + 1, reduced.at(-1).timestampMs);
+  const keys = reportMode === "dual"
+    ? [["leftKg", "#f2385a", 5], ["rightKg", "#3977ff", 5], ["valueKg", "#ffffff", 7]]
+    : [["valueKg", "#ffffff", 7]];
+  const maxValue = Math.max(10, ...reduced.flatMap((point) => keys.map(([key]) => Math.max(0, point[key] ?? 0)))) * 1.08;
+  for (const [key, color, width] of keys) {
+    ctx.beginPath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineJoin = "round";
+    reduced.forEach((point, index) => {
+      const x = plotX + ((point.timestampMs - startTs) / (endTs - startTs)) * plotWidth;
+      const y = plotY + plotHeight - (Math.max(0, point[key] ?? 0) / maxValue) * plotHeight;
+      if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  }
+  ctx.fillStyle = "#91a8cf";
+  ctx.font = "500 24px system-ui, sans-serif";
+  ctx.fillText("0 s", plotX, chartY + chartHeight - 24);
+  ctx.textAlign = "right";
+  ctx.fillText(`${summary.duration.toFixed(2)} s`, plotX + plotWidth, chartY + chartHeight - 24);
+  ctx.textAlign = "left";
+
+  let footerY = 1530;
+  if (reportMode === "dual") {
+    drawReportMetric(ctx, 74, 1510, 602, "左脚峰值", `${displayValue(summary.leftPeak).toFixed(1)} ${unit}`, "#f2385a");
+    drawReportMetric(ctx, 724, 1510, 602, "右脚峰值", `${displayValue(summary.rightPeak).toFixed(1)} ${unit}`, "#3977ff");
+    footerY = 1770;
+  }
+  ctx.fillStyle = "#7186aa";
+  ctx.font = "400 24px system-ui, sans-serif";
+  ctx.fillText("由 RexForce 移动力量台生成 · 数据保存在本机", 74, footerY);
+
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!blob) return showToast("图片生成失败", "error");
+  const filename = `rexforce-report-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+  const file = new File([blob], filename, { type: "image/png" });
+  els.exportDialog.close();
+  if (navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
+    try {
+      await navigator.share({ title: "RexForce 测试报告", files: [file] });
+      showToast("结果图片已生成");
+      return;
+    } catch (error) {
+      if (error.name === "AbortError") return;
+    }
+  }
+  downloadBlob(blob, filename);
+  showToast("结果图片已生成");
+}
+
+function openExportDialog() {
+  const points = exportPoints();
+  if (!points.length) return showToast("请先完成一次测试", "error");
+  els.exportHint.textContent = state.lastCompletedSamples.length
+    ? "将导出最近一次完成的测试，包含核心指标和完整曲线。"
+    : "当前尚无已完成测试，将导出实时缓冲中的数据。";
+  els.exportDialog.showModal();
 }
 
 async function sendCommand(bytes, successMessage) {
@@ -476,7 +659,10 @@ els.dualMode.addEventListener("click", () => setTestMode("dual"));
 els.demo.addEventListener("click", () => state.demo ? (stopDemo(), setStatus("idle", "等待连接"), els.demoPill.hidden = true) : startDemo());
 els.start.addEventListener("click", toggleRecording);
 els.tare.addEventListener("click", tare);
-els.export.addEventListener("click", exportCsv);
+els.export.addEventListener("click", openExportDialog);
+els.closeExport.addEventListener("click", () => els.exportDialog.close());
+els.exportImage.addEventListener("click", exportResultImage);
+els.exportCsv.addEventListener("click", exportCsv);
 els.settingsBtn.addEventListener("click", () => els.settings.showModal());
 els.closeSettings.addEventListener("click", () => els.settings.close());
 els.disconnect.addEventListener("click", () => { disconnectDevice(); els.settings.close(); });
