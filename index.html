@@ -24,7 +24,7 @@
 
     <div class="dashboard-grid">
       <section class="hero-card">
-        <p class="eyebrow">实时合力</p>
+        <p class="eyebrow" id="forceLabel">实时力</p>
         <div class="reading"><strong id="forceValue">0.0</strong><span id="forceUnit">kg</span></div>
         <div class="control-row"><button class="primary-action" id="startBtn">开始测试</button><button class="secondary-action" id="tareBtn">软件归零</button></div>
       </section>
@@ -68,7 +68,7 @@
       <div class="setting-row"><label><span>显示单位</span><small>仅改变界面，不改变原始数据</small></label><select id="unitSelect"><option value="kg">kg</option><option value="n">N</option></select></div>
       <div class="setting-row"><label><span>低通滤波</span><small>抑制高频噪声</small></label><select id="filterSelect"><option value="0">关闭</option><option value="10">10 Hz</option><option value="20" selected>20 Hz</option><option value="50">50 Hz</option></select></div>
       <div class="setting-row"><label><span>反转方向</span><small>拉力与压力方向相反时使用</small></label><label class="switch"><input id="invertToggle" type="checkbox"><i></i></label></div>
-      <div class="setting-row"><label><span>主副设备左右互换</span><small>默认主设备为左脚、副设备为右脚</small></label><label class="switch"><input id="swapSidesToggle" type="checkbox"><i></i></label></div>
+      <div class="setting-row" id="dualSettingsRow" hidden><label><span>主副设备左右互换</span><small>默认主设备为左脚、副设备为右脚</small></label><label class="switch"><input id="swapSidesToggle" type="checkbox"><i></i></label></div>
       <section class="calibration"><h3>标准砝码校准</h3><p>请先让设备自动归零，再放置接近常用测试范围的标准砝码。校准会写入主板并持久保存。</p><div class="input-pair"><label>当前显示值 (kg)<input id="calMeasured" type="number" inputmode="decimal" step="0.01" placeholder="例如 10.32"></label><label>标准重量 (kg)<input id="calReference" type="number" inputmode="decimal" step="0.01" placeholder="例如 10.00"></label></div><div class="stack"><button class="primary-action" id="calibrateBtn">发送校准因子</button><button class="secondary-action" id="temperatureBtn">读取温度原始值</button><button class="secondary-action" id="resetFactorBtn">恢复默认比例系数</button></div></section>
       <div class="stack"><button class="danger-action" id="disconnectBtn">断开设备</button></div>
     </div>

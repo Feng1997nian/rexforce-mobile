@@ -1,9 +1,10 @@
 import { REXFORCE, RexForceStreamParser, calibrationCommand, buildMockFrame } from "./protocol.js";
+import { calculateMetrics } from "./metrics.js";
 
 const $ = (selector) => document.querySelector(selector);
 const els = {
   connect: $("#connectBtn"), demo: $("#demoBtn"), status: $("#connectionStatus"), statusDot: $("#statusDot"),
-  deviceName: $("#deviceName"), value: $("#forceValue"), unit: $("#forceUnit"), peak: $("#peakValue"),
+  deviceName: $("#deviceName"), forceLabel: $("#forceLabel"), value: $("#forceValue"), unit: $("#forceUnit"), peak: $("#peakValue"),
   mean: $("#meanValue"), impulse: $("#impulseValue"), rfd: $("#rfdValue"), elapsed: $("#elapsedValue"),
   start: $("#startBtn"), tare: $("#tareBtn"), export: $("#exportBtn"), canvas: $("#forceChart"),
   sessions: $("#sessionList"), emptySessions: $("#emptySessions"), mode: $("#modeBadge"), samples: $("#sampleBadge"),
@@ -13,6 +14,7 @@ const els = {
   leftBalance: $("#leftBalanceBar"), rightBalance: $("#rightBalanceBar"),
   leftPeak: $("#leftPeakValue"), rightPeak: $("#rightPeakValue"), sideImpulse: $("#sideImpulseValue"),
   swapSides: $("#swapSidesToggle"), dualLegend: $("#dualChartLegend"),
+  dualSettings: $("#dualSettingsRow"),
   settings: $("#settingsDialog"), settingsBtn: $("#settingsBtn"), closeSettings: $("#closeSettings"),
   calMeasured: $("#calMeasured"), calReference: $("#calReference"), calibrate: $("#calibrateBtn"),
   resetFactor: $("#resetFactorBtn"), temperature: $("#temperatureBtn"), disconnect: $("#disconnectBtn"),
@@ -26,7 +28,7 @@ const state = {
   leftOffset: 0, rightOffset: 0, latestRawLeft: 0, latestRawRight: 0,
   latestLeft: 0, latestRight: 0, filtered: 0, filteredLeft: 0, filteredRight: 0,
   lastFilterTs: null, raf: null, demoTimer: null, demoTs: 0,
-  currentMode: "single", temperatureRaw: null,
+  currentMode: "single", temperatureRaw: null, hasReceivedData: false, lastUiTs: 0,
 };
 
 function showToast(message, tone = "normal") {
@@ -92,7 +94,35 @@ function consumeEvents(events) {
     }
     state.currentMode = event.mode;
     event.samples.forEach(processSample);
+    if (!state.hasReceivedData && event.samples.length) {
+      state.hasReceivedData = true;
+      if (state.connected) setStatus("connected", "数据接收中");
+    }
   }
+}
+
+function resetStreamState() {
+  state.parser.reset();
+  state.samples = [];
+  state.sessionSamples = [];
+  state.recording = false;
+  state.offset = 0;
+  state.leftOffset = 0;
+  state.rightOffset = 0;
+  state.latestRaw = 0;
+  state.latestRawLeft = 0;
+  state.latestRawRight = 0;
+  state.latest = 0;
+  state.latestLeft = 0;
+  state.latestRight = 0;
+  state.filtered = 0;
+  state.filteredLeft = 0;
+  state.filteredRight = 0;
+  state.lastFilterTs = null;
+  state.currentMode = "single";
+  state.hasReceivedData = false;
+  els.start.textContent = "开始测试";
+  els.start.classList.remove("recording");
 }
 
 function notificationHandler(event) {
@@ -123,15 +153,15 @@ async function connectDevice() {
     const service = await state.server.getPrimaryService(REXFORCE.SERVICE_UUID);
     state.tx = await service.getCharacteristic(REXFORCE.TX_UUID);
     state.rx = await service.getCharacteristic(REXFORCE.RX_UUID);
+    resetStreamState();
     await state.tx.startNotifications();
     state.tx.addEventListener("characteristicvaluechanged", notificationHandler);
     state.connected = true;
     state.demo = false;
-    state.parser.reset();
     els.deviceName.textContent = device.name || "RexForce";
     els.connect.textContent = "已连接";
     els.demoPill.hidden = true;
-    setStatus("connected", "蓝牙已连接");
+    setStatus("connected", "已连接，等待数据");
     showToast(`已连接 ${device.name || "RexForce"}`);
   } catch (error) {
     if (error.name === "NotFoundError") setStatus("idle", "未选择设备");
@@ -146,12 +176,14 @@ async function connectDevice() {
 }
 
 function onDisconnected() {
+  const wasRecording = state.recording;
+  if (wasRecording) finishRecording();
   state.connected = false;
   state.tx = null;
   state.rx = null;
   els.connect.textContent = "连接设备";
   setStatus("idle", "设备已断开");
-  showToast("蓝牙连接已断开", "error");
+  showToast(wasRecording ? "设备断开，测试已自动保存" : "蓝牙连接已断开", "error");
 }
 
 async function disconnectDevice(sendCommand = true) {
@@ -167,8 +199,10 @@ async function disconnectDevice(sendCommand = true) {
 }
 
 function startDemo() {
+  if (state.recording) finishRecording();
   if (state.connected) disconnectDevice(false);
   stopDemo();
+  resetStreamState();
   state.demo = true;
   state.demoTs = 0;
   state.parser.reset();
@@ -177,15 +211,13 @@ function startDemo() {
   setStatus("demo", "演示模式");
   let phase = 0;
   state.demoTimer = setInterval(() => {
-    const values = Array.from({ length: 40 }, (_, index) => {
-      const t = (phase + index * 2) / 1000;
+    const values = Array.from({ length: 80 }, (_, index) => {
+      const t = (phase + index) / 1000;
       const rep = t % 4.5;
       const effort = rep > 0.7 && rep < 3.2 ? Math.sin(((rep - 0.7) / 2.5) * Math.PI) ** 0.65 : 0;
-      const left = Math.max(0, effort * 49 + Math.sin(t * 27) * 0.5 + (Math.random() - 0.5) * 0.5);
-      const right = Math.max(0, effort * 43 + Math.sin(t * 29 + .7) * 0.5 + (Math.random() - 0.5) * 0.5);
-      return [left, right];
+      return Math.max(0, effort * 92 + Math.sin(t * 27) * 0.7 + (Math.random() - 0.5) * 0.5);
     });
-    consumeEvents(state.parser.push(buildMockFrame({ timestamp: state.demoTs % 65535, mode: "dual", values })));
+    consumeEvents(state.parser.push(buildMockFrame({ timestamp: state.demoTs % 65535, mode: "single", values })));
     state.demoTs += 80;
     phase += 80;
   }, 80);
@@ -234,36 +266,6 @@ function finishRecording() {
   localStorage.setItem("rexforce.sessions.v1", JSON.stringify(sessions.slice(0, 30)));
   renderSessions();
   showToast("测试已保存到本机");
-}
-
-function calculateMetrics(points) {
-  if (!points.length) return { duration: 0, peak: 0, mean: 0, impulse: 0, rfd: 0, leftPeak: 0, rightPeak: 0, leftImpulse: 0, rightImpulse: 0 };
-  const positive = points.map((p) => Math.max(0, p.valueKg));
-  const left = points.map((p) => Math.max(0, p.leftKg ?? p.valueKg));
-  const right = points.map((p) => Math.max(0, p.rightKg ?? 0));
-  const peak = Math.max(...positive);
-  const mean = positive.reduce((a, b) => a + b, 0) / positive.length;
-  let impulse = 0;
-  let leftImpulse = 0;
-  let rightImpulse = 0;
-  let rfd = 0;
-  for (let i = 1; i < points.length; i += 1) {
-    const dt = (points[i].timestampMs - points[i - 1].timestampMs) / 1000;
-    if (dt <= 0 || dt > 0.2) continue;
-    impulse += ((positive[i] + positive[i - 1]) / 2) * 9.80665 * dt;
-    leftImpulse += ((left[i] + left[i - 1]) / 2) * 9.80665 * dt;
-    rightImpulse += ((right[i] + right[i - 1]) / 2) * 9.80665 * dt;
-    const windowStart = points[i].timestampMs - 200;
-    let j = i - 1;
-    while (j > 0 && points[j].timestampMs > windowStart) j -= 1;
-    const windowDt = (points[i].timestampMs - points[j].timestampMs) / 1000;
-    if (windowDt > 0) rfd = Math.max(rfd, ((positive[i] - positive[j]) * 9.80665) / windowDt);
-  }
-  return {
-    duration: Math.max(0, (points.at(-1).timestampMs - points[0].timestampMs) / 1000),
-    peak, mean, impulse, rfd,
-    leftPeak: Math.max(...left), rightPeak: Math.max(...right), leftImpulse, rightImpulse,
-  };
 }
 
 function downsample(points, maxPoints) {
@@ -325,6 +327,7 @@ async function sendCommand(bytes, successMessage) {
 }
 
 function tare() {
+  if (!state.hasReceivedData && !state.demo) return showToast("尚未收到测力数据", "error");
   state.offset = state.latestRaw;
   state.leftOffset = state.latestRawLeft;
   state.rightOffset = state.latestRawRight;
@@ -340,7 +343,12 @@ function displayValue(kg) {
 
 function displayUnit() { return els.unitSelect.value === "n" ? "N" : "kg"; }
 
-function updateDashboard() {
+function updateDashboard(now = 0) {
+  if (now - state.lastUiTs < 66) {
+    state.raf = requestAnimationFrame(updateDashboard);
+    return;
+  }
+  state.lastUiTs = now;
   const unit = displayUnit();
   els.value.textContent = displayValue(state.latest).toFixed(1);
   els.unit.textContent = unit;
@@ -351,8 +359,10 @@ function updateDashboard() {
   els.impulse.textContent = `${metrics.impulse.toFixed(0)} N·s`;
   els.rfd.textContent = `${metrics.rfd.toFixed(0)} N/s`;
   const dual = state.currentMode === "dual";
+  els.forceLabel.textContent = dual ? "实时合力" : "实时力";
   els.dualPanel.hidden = !dual;
   els.dualLegend.hidden = !dual;
+  els.dualSettings.hidden = !dual;
   if (dual) {
     const left = Math.max(0, state.latestLeft);
     const right = Math.max(0, state.latestRight);
