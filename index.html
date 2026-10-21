@@ -16,6 +16,15 @@
       <button class="icon-button" id="settingsBtn" aria-label="打开设置">⚙</button>
     </header>
 
+    <section class="mode-card" aria-labelledby="modeTitle">
+      <div class="mode-copy"><small>测试模式</small><strong id="modeTitle">选择力量台配置</strong></div>
+      <div class="mode-switch" role="group" aria-label="力量台模式">
+        <button class="mode-option single is-active" id="singleModeBtn" type="button" aria-pressed="true"><span>单机</span><small>1 块平台</small></button>
+        <button class="mode-option dual" id="dualModeBtn" type="button" aria-pressed="false"><span>双机</span><small>左右脚</small></button>
+      </div>
+      <p class="mode-help" id="modeHelp">单机模式：记录一块测力台的实时力量与训练指标。</p>
+    </section>
+
     <section class="status-card" aria-live="polite">
       <div class="status-left"><i class="status-dot" id="statusDot" data-state="idle"></i><span><strong id="deviceName">未连接设备</strong><small id="connectionStatus">等待连接</small></span></div>
       <button class="primary-small" id="connectBtn">连接设备</button>
