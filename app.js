@@ -25,7 +25,7 @@ const els = {
 };
 
 const state = {
-  device: null, server: null, tx: null, rx: null, connected: false, demo: false,
+  device: null, server: null, tx: null, rx: null, connected: false, connecting: false, disconnecting: false, demo: false,
   parser: new RexForceStreamParser(), samples: [], displaySamples: [], recording: false,
   sessionSamples: [], sessionStart: 0, offset: 0, latestRaw: 0, latest: 0,
   leftOffset: 0, rightOffset: 0, latestRawLeft: 0, latestRawRight: 0,
@@ -164,12 +164,51 @@ function notificationHandler(event) {
   consumeEvents(state.parser.push(bytes));
 }
 
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+function isTransientGattError(error) {
+  return error?.name === "NetworkError"
+    || error?.name === "InvalidStateError"
+    || /gatt|disconnect|connection/i.test(error?.message || "");
+}
+
+async function discoverRexForce(device, attempts = 3) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      setStatus("busy", attempt === 1 ? "正在连接" : `连接中断，自动重试 ${attempt}/${attempts}`);
+      state.server = device.gatt.connected ? device.gatt : await device.gatt.connect();
+      // Some Bluetooth stacks report connected slightly before GATT service
+      // discovery is ready. A short settle avoids an immediate disconnect error.
+      await wait(250);
+      if (!device.gatt.connected) throw new DOMException("GATT disconnected during setup", "NetworkError");
+      const service = await state.server.getPrimaryService(REXFORCE.SERVICE_UUID);
+      const tx = await service.getCharacteristic(REXFORCE.TX_UUID);
+      const rx = await service.getCharacteristic(REXFORCE.RX_UUID);
+      await tx.startNotifications();
+      if (!device.gatt.connected) throw new DOMException("GATT disconnected during setup", "NetworkError");
+      return { tx, rx };
+    } catch (error) {
+      lastError = error;
+      state.server = null;
+      state.tx = null;
+      state.rx = null;
+      if (device.gatt.connected) device.gatt.disconnect();
+      if (!isTransientGattError(error) || attempt === attempts) break;
+      await wait(450 * attempt);
+    }
+  }
+  throw lastError;
+}
+
 async function connectDevice() {
   if (!navigator.bluetooth) {
     showToast("当前浏览器不支持网页蓝牙；iPhone 请使用 Bluefy", "error");
     els.installHint.hidden = false;
     return;
   }
+  if (state.connecting) return;
+  state.connecting = true;
   try {
     setStatus("busy", "请在列表选择 Force-XXXX");
     const device = await navigator.bluetooth.requestDevice({
@@ -181,15 +220,13 @@ async function connectDevice() {
     });
     device.addEventListener("gattserverdisconnected", onDisconnected);
     state.device = device;
-    setStatus("busy", "正在连接");
-    state.server = await device.gatt.connect();
-    const service = await state.server.getPrimaryService(REXFORCE.SERVICE_UUID);
-    state.tx = await service.getCharacteristic(REXFORCE.TX_UUID);
-    state.rx = await service.getCharacteristic(REXFORCE.RX_UUID);
+    const characteristics = await discoverRexForce(device);
+    state.tx = characteristics.tx;
+    state.rx = characteristics.rx;
     resetStreamState();
-    await state.tx.startNotifications();
     state.tx.addEventListener("characteristicvaluechanged", notificationHandler);
     state.connected = true;
+    state.connecting = false;
     state.demo = false;
     els.deviceName.textContent = device.name || "RexForce";
     els.connect.textContent = "已连接";
@@ -197,11 +234,16 @@ async function connectDevice() {
     setStatus("connected", "已连接，等待数据");
     showToast(`已连接 ${device.name || "RexForce"}`);
   } catch (error) {
+    state.connecting = false;
+    state.connected = false;
+    els.connect.textContent = "连接设备";
     if (error.name === "NotFoundError") setStatus("idle", "未选择设备");
     else {
       setStatus("error", "连接失败");
       const message = error.name === "NotSupportedError"
         ? "所选设备没有 RexForce 服务，请选择 Force-XXXX"
+        : isTransientGattError(error)
+          ? "蓝牙连接被中断。请关闭正在连接测力台的其他软件，确认设备有电后重试"
         : (error.message || "连接失败");
       showToast(message, "error");
     }
@@ -209,11 +251,17 @@ async function connectDevice() {
 }
 
 function onDisconnected() {
+  state.server = null;
+  state.tx = null;
+  state.rx = null;
+  if (state.connecting) return;
+  if (state.disconnecting) {
+    state.disconnecting = false;
+    return;
+  }
   const wasRecording = state.recording;
   if (wasRecording) finishRecording();
   state.connected = false;
-  state.tx = null;
-  state.rx = null;
   els.connect.textContent = "连接设备";
   setStatus("idle", "设备已断开");
   showToast(wasRecording ? "设备断开，测试已自动保存" : "蓝牙连接已断开", "error");
@@ -224,7 +272,10 @@ async function disconnectDevice(sendCommand = true) {
   try {
     if (sendCommand && state.rx) await state.rx.writeValueWithoutResponse(new Uint8Array([0x54, 0xde]));
   } catch (_) {}
-  if (state.device?.gatt?.connected) state.device.gatt.disconnect();
+  if (state.device?.gatt?.connected) {
+    state.disconnecting = true;
+    state.device.gatt.disconnect();
+  }
   state.connected = false;
   setStatus("idle", "等待连接");
   els.deviceName.textContent = "未连接设备";
