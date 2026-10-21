@@ -87,13 +87,22 @@
     <div class="dialog-head"><div><small class="dialog-kicker">最近一次测试</small><h2>导出结果</h2></div><button class="icon-button" id="closeExport" aria-label="关闭导出">×</button></div>
     <div class="settings-body">
       <p class="export-intro" id="exportHint">生成包含核心指标和完整力—时间曲线的训练报告。</p>
-      <div class="export-options">
-        <button class="export-option image" id="exportImageBtn"><span class="export-icon">▧</span><span><strong>保存结果图片</strong><small>适合相册保存与微信分享</small></span></button>
+      <div class="export-options" id="exportOptions">
+        <button class="export-option image" id="exportImageBtn"><span class="export-icon">▧</span><span><strong>预览并保存图片</strong><small>生成后可分享、下载或长按保存</small></span></button>
         <button class="export-option csv" id="exportCsvBtn"><span class="export-icon">CSV</span><span><strong>导出原始 CSV</strong><small>适合 Excel 和进一步分析</small></span></button>
       </div>
+      <section class="export-preview" id="exportPreviewPanel" hidden>
+        <img id="exportPreview" alt="RexForce 测试报告预览">
+        <p>若系统分享失败，可点击“下载 PNG”，或长按上方图片保存。</p>
+        <div class="export-preview-actions">
+          <button class="primary-action" id="exportShareBtn">系统分享</button>
+          <button class="secondary-action" id="exportDownloadBtn">下载 PNG</button>
+        </div>
+        <button class="export-back" id="exportBackBtn">返回导出选项</button>
+      </section>
     </div>
   </dialog>
   <div class="toast" id="toast" role="status"></div>
-  <script type="module" src="./app.js?v=8"></script>
+  <script type="module" src="./app.js?v=9"></script>
 </body>
 </html>

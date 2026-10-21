@@ -9,7 +9,9 @@ const els = {
   mean: $("#meanValue"), impulse: $("#impulseValue"), rfd: $("#rfdValue"), elapsed: $("#elapsedValue"),
   start: $("#startBtn"), tare: $("#tareBtn"), export: $("#exportBtn"), canvas: $("#forceChart"),
   exportDialog: $("#exportDialog"), closeExport: $("#closeExport"), exportHint: $("#exportHint"),
-  exportImage: $("#exportImageBtn"), exportCsv: $("#exportCsvBtn"),
+  exportOptions: $("#exportOptions"), exportImage: $("#exportImageBtn"), exportCsv: $("#exportCsvBtn"),
+  exportPreviewPanel: $("#exportPreviewPanel"), exportPreview: $("#exportPreview"),
+  exportShare: $("#exportShareBtn"), exportDownload: $("#exportDownloadBtn"), exportBack: $("#exportBackBtn"),
   sessions: $("#sessionList"), emptySessions: $("#emptySessions"), mode: $("#modeBadge"), samples: $("#sampleBadge"),
   validRate: $("#validRate"), invert: $("#invertToggle"), filter: $("#filterSelect"), unitSelect: $("#unitSelect"),
   dualPanel: $("#dualPanel"), leftValue: $("#leftForceValue"), rightValue: $("#rightForceValue"),
@@ -34,6 +36,7 @@ const state = {
   currentMode: "single", selectedMode: localStorage.getItem("rexforce.mode.v1") === "dual" ? "dual" : "single",
   temperatureRaw: null, hasReceivedData: false, lastUiTs: 0,
   lastCompletedSamples: [], lastCompletedAt: null, lastCompletedMode: "single",
+  exportBlob: null, exportFilename: "", exportPreviewUrl: "",
 };
 
 function showToast(message, tone = "normal") {
@@ -445,9 +448,12 @@ function drawReportMetric(ctx, x, y, width, label, value, accent) {
   ctx.fillText(value, x + 34, y + 122);
 }
 
-async function exportResultImage() {
+async function buildResultImage() {
   const points = exportPoints();
-  if (points.length < 2) return showToast("请先完成一次测试", "error");
+  if (points.length < 2) {
+    showToast("请先完成一次测试", "error");
+    return null;
+  }
   const summary = calculateMetrics(points);
   const reportMode = state.recording || !state.lastCompletedSamples.length ? state.selectedMode : state.lastCompletedMode;
   const reportDate = state.lastCompletedAt || new Date();
@@ -558,26 +564,73 @@ async function exportResultImage() {
   ctx.fillText("由 RexForce 移动力量台生成 · 数据保存在本机", 74, footerY);
 
   const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
-  if (!blob) return showToast("图片生成失败", "error");
-  const filename = `rexforce-report-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
-  const file = new File([blob], filename, { type: "image/png" });
-  els.exportDialog.close();
-  if (navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
-    try {
-      await navigator.share({ title: "RexForce 测试报告", files: [file] });
-      showToast("结果图片已生成");
-      return;
-    } catch (error) {
-      if (error.name === "AbortError") return;
-    }
+  if (!blob) {
+    showToast("图片生成失败", "error");
+    return null;
   }
-  downloadBlob(blob, filename);
-  showToast("结果图片已生成");
+  const filename = `rexforce-report-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+  return { blob, filename };
+}
+
+function clearExportPreview() {
+  if (state.exportPreviewUrl) URL.revokeObjectURL(state.exportPreviewUrl);
+  state.exportBlob = null;
+  state.exportFilename = "";
+  state.exportPreviewUrl = "";
+  els.exportPreview.removeAttribute("src");
+  els.exportPreviewPanel.hidden = true;
+  els.exportOptions.hidden = false;
+}
+
+async function showResultImage() {
+  els.exportImage.disabled = true;
+  els.exportImage.querySelector("strong").textContent = "正在生成图片…";
+  let report;
+  try {
+    report = await buildResultImage();
+  } catch (error) {
+    showToast(error?.message || "图片生成失败", "error");
+  } finally {
+    els.exportImage.disabled = false;
+    els.exportImage.querySelector("strong").textContent = "预览并保存图片";
+  }
+  if (!report) return;
+  clearExportPreview();
+  state.exportBlob = report.blob;
+  state.exportFilename = report.filename;
+  state.exportPreviewUrl = URL.createObjectURL(report.blob);
+  els.exportPreview.src = state.exportPreviewUrl;
+  els.exportOptions.hidden = true;
+  els.exportPreviewPanel.hidden = false;
+  els.exportHint.textContent = "报告图片已生成，可分享、下载或长按保存。";
+}
+
+async function shareResultImage() {
+  if (!state.exportBlob) return;
+  const file = new File([state.exportBlob], state.exportFilename, { type: "image/png" });
+  if (!navigator.share || (navigator.canShare && !navigator.canShare({ files: [file] }))) {
+    showToast("当前浏览器不支持图片分享，请下载 PNG 或长按图片保存", "error");
+    return;
+  }
+  try {
+    await navigator.share({ title: "RexForce 测试报告", files: [file] });
+    showToast("结果图片已分享");
+  } catch (error) {
+    const cancelled = error?.name === "AbortError";
+    showToast(cancelled ? "已取消分享，图片仍可下载或长按保存" : "系统分享失败，请下载 PNG 或长按图片保存", cancelled ? "" : "error");
+  }
+}
+
+function downloadResultImage() {
+  if (!state.exportBlob) return;
+  downloadBlob(state.exportBlob, state.exportFilename);
+  showToast("PNG 图片已下载");
 }
 
 function openExportDialog() {
   const points = exportPoints();
   if (!points.length) return showToast("请先完成一次测试", "error");
+  clearExportPreview();
   els.exportHint.textContent = state.lastCompletedSamples.length
     ? "将导出最近一次完成的测试，包含核心指标和完整曲线。"
     : "当前尚无已完成测试，将导出实时缓冲中的数据。";
@@ -711,8 +764,14 @@ els.demo.addEventListener("click", () => state.demo ? (stopDemo(), setStatus("id
 els.start.addEventListener("click", toggleRecording);
 els.tare.addEventListener("click", tare);
 els.export.addEventListener("click", openExportDialog);
-els.closeExport.addEventListener("click", () => els.exportDialog.close());
-els.exportImage.addEventListener("click", exportResultImage);
+els.closeExport.addEventListener("click", () => { clearExportPreview(); els.exportDialog.close(); });
+els.exportImage.addEventListener("click", showResultImage);
+els.exportShare.addEventListener("click", shareResultImage);
+els.exportDownload.addEventListener("click", downloadResultImage);
+els.exportBack.addEventListener("click", () => {
+  clearExportPreview();
+  els.exportHint.textContent = "生成包含核心指标和完整力—时间曲线的训练报告。";
+});
 els.exportCsv.addEventListener("click", exportCsv);
 els.settingsBtn.addEventListener("click", () => els.settings.showModal());
 els.closeSettings.addEventListener("click", () => els.settings.close());
