@@ -1,0 +1,9 @@
+{
+  "name": "RexForce 移动力量台",
+  "short_name": "RexForce",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#07100f",
+  "theme_color": "#07100f",
+  "description": "RexForce 蓝牙测力、训练分析与本地记录工具"
+}
