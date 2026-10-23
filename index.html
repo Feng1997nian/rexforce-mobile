@@ -7,7 +7,7 @@
   <meta name="description" content="RexForce 蓝牙测力、训练分析与本地记录工具">
   <title>RexForce 移动力量台</title>
   <link rel="manifest" href="./manifest.webmanifest">
-  <link rel="stylesheet" href="./styles.css?v=8">
+  <link rel="stylesheet" href="./styles.css?v=10">
 </head>
 <body>
   <main class="app-shell">
@@ -17,12 +17,22 @@
     </header>
 
     <section class="mode-card" aria-labelledby="modeTitle">
-      <div class="mode-copy"><small>测试模式</small><strong id="modeTitle">选择力量台配置</strong></div>
+      <div class="mode-copy"><small>设备配置</small><strong id="modeTitle">选择力量台配置</strong></div>
       <div class="mode-switch" role="group" aria-label="力量台模式">
         <button class="mode-option single is-active" id="singleModeBtn" type="button" aria-pressed="true"><span>单机</span><small>1 块平台</small></button>
         <button class="mode-option dual" id="dualModeBtn" type="button" aria-pressed="false"><span>双机</span><small>左右脚</small></button>
       </div>
       <p class="mode-help" id="modeHelp">单机模式：记录一块测力台的实时力量与训练指标。</p>
+    </section>
+
+    <section class="test-card" aria-labelledby="testTitle">
+      <div class="mode-copy"><small>测试类型</small><strong id="testTitle">选择训练测试</strong></div>
+      <div class="test-switch" role="group" aria-label="测试类型">
+        <button class="test-option is-active" id="strengthTestBtn" type="button" aria-pressed="true"><strong>力量</strong><small>力—时间</small></button>
+        <button class="test-option" id="cmjTestBtn" type="button" aria-pressed="false"><strong>CMJ</strong><small>单次纵跳</small></button>
+        <button class="test-option" id="repeatJumpTestBtn" type="button" aria-pressed="false"><strong>连续跳</strong><small>RSI</small></button>
+      </div>
+      <p class="mode-help" id="testHelp">记录实时力量、峰值、平均力、冲量与最大 RFD。</p>
     </section>
 
     <section class="status-card" aria-live="polite">
@@ -39,10 +49,10 @@
       </section>
 
       <section class="metrics" aria-label="测试指标">
-        <div class="metric"><small>峰值力</small><strong id="peakValue">0.0 kg</strong></div>
-        <div class="metric"><small>平均力</small><strong id="meanValue">0.0 kg</strong></div>
-        <div class="metric"><small>冲量</small><strong id="impulseValue">0 N·s</strong></div>
-        <div class="metric"><small>最大 RFD</small><strong id="rfdValue">0 N/s</strong></div>
+        <div class="metric"><small id="peakLabel">峰值力</small><strong id="peakValue">0.0 kg</strong></div>
+        <div class="metric"><small id="meanLabel">平均力</small><strong id="meanValue">0.0 kg</strong></div>
+        <div class="metric"><small id="impulseLabel">冲量</small><strong id="impulseValue">0 N·s</strong></div>
+        <div class="metric"><small id="rfdLabel">最大 RFD</small><strong id="rfdValue">0 N/s</strong></div>
       </section>
     </div>
 
@@ -54,6 +64,11 @@
       </div>
       <div class="balance-track" aria-label="左右脚受力占比"><i id="leftBalanceBar"></i><i id="rightBalanceBar"></i></div>
       <div class="side-metrics"><span>左峰值 <b id="leftPeakValue">0.0 kg</b></span><span>右峰值 <b id="rightPeakValue">0.0 kg</b></span><span>左右冲量 <b id="sideImpulseValue">0 / 0 N·s</b></span></div>
+    </section>
+
+    <section class="jump-card" id="jumpPanel" hidden>
+      <div class="section-head"><h2 id="jumpPanelTitle">跳跃结果</h2><span class="pill" id="jumpStatus">等待起跳</span></div>
+      <div class="jump-list" id="jumpList"><p class="empty">开始测试后，先安静站立约 1 秒再起跳。</p></div>
     </section>
 
     <section class="chart-card">
@@ -103,6 +118,6 @@
     </div>
   </dialog>
   <div class="toast" id="toast" role="status"></div>
-  <script type="module" src="./app.js?v=9"></script>
+  <script type="module" src="./app.js?v=10"></script>
 </body>
 </html>

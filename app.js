@@ -1,12 +1,16 @@
 import { REXFORCE, RexForceStreamParser, calibrationCommand, buildMockFrame } from "./protocol.js";
 import { calculateMetrics } from "./metrics.js";
+import { analyzeJumps } from "./jump-metrics.js";
 
 const $ = (selector) => document.querySelector(selector);
 const els = {
   connect: $("#connectBtn"), demo: $("#demoBtn"), status: $("#connectionStatus"), statusDot: $("#statusDot"),
   singleMode: $("#singleModeBtn"), dualMode: $("#dualModeBtn"), modeHelp: $("#modeHelp"),
+  strengthTest: $("#strengthTestBtn"), cmjTest: $("#cmjTestBtn"), repeatJumpTest: $("#repeatJumpTestBtn"), testHelp: $("#testHelp"),
   deviceName: $("#deviceName"), forceLabel: $("#forceLabel"), value: $("#forceValue"), unit: $("#forceUnit"), peak: $("#peakValue"),
   mean: $("#meanValue"), impulse: $("#impulseValue"), rfd: $("#rfdValue"), elapsed: $("#elapsedValue"),
+  peakLabel: $("#peakLabel"), meanLabel: $("#meanLabel"), impulseLabel: $("#impulseLabel"), rfdLabel: $("#rfdLabel"),
+  jumpPanel: $("#jumpPanel"), jumpPanelTitle: $("#jumpPanelTitle"), jumpStatus: $("#jumpStatus"), jumpList: $("#jumpList"),
   start: $("#startBtn"), tare: $("#tareBtn"), export: $("#exportBtn"), canvas: $("#forceChart"),
   exportDialog: $("#exportDialog"), closeExport: $("#closeExport"), exportHint: $("#exportHint"),
   exportOptions: $("#exportOptions"), exportImage: $("#exportImageBtn"), exportCsv: $("#exportCsvBtn"),
@@ -32,10 +36,12 @@ const state = {
   sessionSamples: [], sessionStart: 0, offset: 0, latestRaw: 0, latest: 0,
   leftOffset: 0, rightOffset: 0, latestRawLeft: 0, latestRawRight: 0,
   latestLeft: 0, latestRight: 0, filtered: 0, filteredLeft: 0, filteredRight: 0,
-  lastFilterTs: null, raf: null, demoTimer: null, demoTs: 0,
+  lastFilterTs: null, raf: null, demoTimer: null, demoTs: 0, demoPhase: 0,
   currentMode: "single", selectedMode: localStorage.getItem("rexforce.mode.v1") === "dual" ? "dual" : "single",
+  assessment: ["strength", "cmj", "repeat"].includes(localStorage.getItem("rexforce.assessment.v1")) ? localStorage.getItem("rexforce.assessment.v1") : "strength",
   temperatureRaw: null, hasReceivedData: false, lastUiTs: 0,
-  lastCompletedSamples: [], lastCompletedAt: null, lastCompletedMode: "single",
+  lastCompletedSamples: [], lastCompletedAt: null, lastCompletedMode: "single", lastCompletedAssessment: "strength",
+  jumpAnalysis: { bodyMassKg: 0, jumps: [], cmj: null }, lastJumpAnalysisAt: 0, renderedJumpCount: -1,
   exportBlob: null, exportFilename: "", exportPreviewUrl: "",
 };
 
@@ -159,6 +165,55 @@ function setTestMode(mode, announce = true) {
     state.lastFilterTs = null;
   }
   if (announce) showToast(mode === "dual" ? "已切换到双机模式" : "已切换到单机模式");
+}
+
+function setAssessment(type, announce = true) {
+  if (!["strength", "cmj", "repeat"].includes(type)) return;
+  if (state.recording) {
+    showToast("请先结束当前测试再切换类型", "error");
+    return;
+  }
+  state.assessment = type;
+  localStorage.setItem("rexforce.assessment.v1", type);
+  [[els.strengthTest, "strength"], [els.cmjTest, "cmj"], [els.repeatJumpTest, "repeat"]].forEach(([button, value]) => {
+    const active = value === type;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  els.jumpPanel.hidden = type === "strength";
+  if (type === "strength") {
+    els.testHelp.textContent = "记录实时力量、峰值、平均力、冲量与最大 RFD。";
+    [els.peakLabel.textContent, els.meanLabel.textContent, els.impulseLabel.textContent, els.rfdLabel.textContent] = ["峰值力", "平均力", "冲量", "最大 RFD"];
+    els.start.textContent = "开始测试";
+  } else if (type === "cmj") {
+    els.testHelp.textContent = "开始后安静站立约 1 秒，再完成一次最大努力反向纵跳。";
+    [els.peakLabel.textContent, els.meanLabel.textContent, els.impulseLabel.textContent, els.rfdLabel.textContent] = ["跳跃高度", "滞空时间", "起跳用时", "RSImod"];
+    els.jumpPanelTitle.textContent = "CMJ 阶段识别";
+    els.start.textContent = "开始 CMJ";
+  } else {
+    els.testHelp.textContent = "开始后安静站立约 1 秒，再连续起跳；尽量跳高并缩短触地时间。";
+    [els.peakLabel.textContent, els.meanLabel.textContent, els.impulseLabel.textContent, els.rfdLabel.textContent] = ["有效跳数", "最佳高度", "平均高度", "最佳 RSI"];
+    els.jumpPanelTitle.textContent = "连续跳明细";
+    els.start.textContent = "开始连续跳";
+  }
+  renderJumpResults({ jumps: [], cmj: null });
+  if (announce) showToast(type === "cmj" ? "已切换到 CMJ" : type === "repeat" ? "已切换到连续跳" : "已切换到力量测试");
+}
+
+function renderJumpResults(analysis) {
+  if (state.assessment === "strength") return;
+  const jumps = analysis.jumps || [];
+  els.jumpStatus.textContent = jumps.length ? `${jumps.length} 跳已识别` : "等待起跳";
+  if (!jumps.length) {
+    els.jumpList.innerHTML = '<p class="empty">开始测试后，先安静站立约 1 秒再起跳。</p>';
+    return;
+  }
+  const shown = state.assessment === "cmj" ? jumps.slice(0, 1) : jumps;
+  els.jumpList.innerHTML = shown.map((jump) => {
+    const contact = jump.contactTime ? `${Math.round(jump.contactTime * 1000)} ms` : "—";
+    const index = state.assessment === "cmj" ? "CMJ" : `#${jump.number}`;
+    return `<div class="jump-row"><strong>${index}</strong><span><small>高度</small><b>${(jump.jumpHeightM * 100).toFixed(1)} cm</b></span><span><small>滞空</small><b>${Math.round(jump.flightTime * 1000)} ms</b></span><span><small>${state.assessment === "cmj" ? "RSImod" : "触地 / RSI"}</small><b>${state.assessment === "cmj" ? (analysis.cmj?.rsiMod?.toFixed(2) ?? "—") : `${contact} / ${jump.rsi?.toFixed(2) ?? "—"}`}</b></span></div>`;
+  }).join("");
 }
 
 function notificationHandler(event) {
@@ -297,20 +352,36 @@ function startDemo() {
   els.demo.textContent = "停止演示数据";
   els.demoPill.hidden = false;
   setStatus("demo", "演示模式");
-  let phase = 0;
+  state.demoPhase = 0;
   state.demoTimer = setInterval(() => {
     const dual = state.selectedMode === "dual";
     const values = Array.from({ length: dual ? 40 : 80 }, (_, index) => {
-      const t = (phase + index * (dual ? 2 : 1)) / 1000;
-      const rep = t % 4.5;
-      const effort = rep > 0.7 && rep < 3.2 ? Math.sin(((rep - 0.7) / 2.5) * Math.PI) ** 0.65 : 0;
-      const left = Math.max(0, effort * 49 + Math.sin(t * 27) * 0.5 + (Math.random() - 0.5) * 0.5);
-      const right = Math.max(0, effort * 43 + Math.sin(t * 29 + .7) * 0.5 + (Math.random() - 0.5) * 0.5);
-      return dual ? [left, right] : left + right;
+      const t = (state.demoPhase + index * (dual ? 2 : 1)) / 1000;
+      let total;
+      if (state.assessment === "strength") {
+        const rep = t % 4.5;
+        const effort = rep > 0.7 && rep < 3.2 ? Math.sin(((rep - 0.7) / 2.5) * Math.PI) ** 0.65 : 0;
+        total = Math.max(0, effort * 92 + Math.sin(t * 27) * 0.6);
+      } else if (state.assessment === "cmj") {
+        if (t < 1.2) total = 75;
+        else if (t < 1.5) total = 55;
+        else if (t < 1.8) total = 115;
+        else if (t < 2.3) total = 0;
+        else if (t < 2.55) total = 130;
+        else total = 75;
+      } else {
+        if (t < 1.1) total = 75;
+        else {
+          const rep = (t - 1.1) % .82;
+          total = rep < .22 ? 115 : rep < .62 ? 0 : 125;
+        }
+      }
+      total = Math.max(0, total + (Math.random() - .5) * .35);
+      return dual ? [total * .52, total * .48] : total;
     });
     consumeEvents(state.parser.push(buildMockFrame({ timestamp: state.demoTs % 65535, mode: state.selectedMode, values })));
     state.demoTs += 80;
-    phase += 80;
+    state.demoPhase += 80;
   }, 80);
   showToast("演示数据已启动");
 }
@@ -328,8 +399,12 @@ function toggleRecording() {
     return;
   }
   if (!state.recording) {
+    if (state.demo && state.assessment !== "strength") state.demoPhase = 0;
     state.recording = true;
     state.sessionSamples = [];
+    state.jumpAnalysis = { bodyMassKg: 0, jumps: [], cmj: null };
+    state.lastJumpAnalysisAt = 0;
+    state.renderedJumpCount = -1;
     state.sessionStart = Date.now();
     els.start.textContent = "结束测试";
     els.start.classList.add("recording");
@@ -341,26 +416,40 @@ function toggleRecording() {
 
 function finishRecording() {
   state.recording = false;
-  els.start.textContent = "开始测试";
+  els.start.textContent = state.assessment === "cmj" ? "开始 CMJ" : state.assessment === "repeat" ? "开始连续跳" : "开始测试";
   els.start.classList.remove("recording");
   if (state.sessionSamples.length < 2) return;
   state.lastCompletedSamples = state.sessionSamples.slice();
   state.lastCompletedAt = new Date();
   state.lastCompletedMode = state.selectedMode;
+  state.lastCompletedAssessment = state.assessment;
   const summary = calculateMetrics(state.sessionSamples);
+  const jumpAnalysis = analyzeJumps(state.sessionSamples);
+  const heights = jumpAnalysis.jumps.map((jump) => jump.jumpHeightM);
+  const rsiValues = jumpAnalysis.jumps.map((jump) => jump.rsi).filter(Number.isFinite);
   const session = {
-    id: Date.now(), createdAt: new Date().toISOString(), mode: state.selectedMode,
+    id: Date.now(), createdAt: new Date().toISOString(), mode: state.selectedMode, assessment: state.assessment,
     duration: summary.duration, peak: summary.peak, mean: summary.mean,
     impulse: summary.impulse, rfd: summary.rfd,
     leftPeak: summary.leftPeak, rightPeak: summary.rightPeak,
     leftImpulse: summary.leftImpulse, rightImpulse: summary.rightImpulse,
+    jumpCount: jumpAnalysis.jumps.length,
+    jumpHeightCm: jumpAnalysis.cmj ? jumpAnalysis.cmj.jumpHeightM * 100 : 0,
+    flightTimeMs: jumpAnalysis.cmj ? jumpAnalysis.cmj.flightTime * 1000 : 0,
+    timeToTakeoffMs: jumpAnalysis.cmj?.timeToTakeoff ? jumpAnalysis.cmj.timeToTakeoff * 1000 : 0,
+    rsiMod: jumpAnalysis.cmj?.rsiMod || 0,
+    bestJumpCm: heights.length ? Math.max(...heights) * 100 : 0,
+    meanJumpCm: heights.length ? (heights.reduce((sum, value) => sum + value, 0) / heights.length) * 100 : 0,
+    bestRsi: rsiValues.length ? Math.max(...rsiValues) : 0,
     curve: downsample(state.sessionSamples, 500).map((p) => [p.timestampMs, p.valueKg]),
   };
   const sessions = loadSessions();
   sessions.unshift(session);
   localStorage.setItem("rexforce.sessions.v1", JSON.stringify(sessions.slice(0, 30)));
   renderSessions();
-  showToast("测试已保存，可导出结果");
+  if (state.assessment === "cmj" && !jumpAnalysis.cmj) showToast("未识别到完整跳跃，请保持完整离台和落地", "error");
+  else if (state.assessment === "repeat" && !jumpAnalysis.jumps.length) showToast("未识别到完整跳跃", "error");
+  else showToast("测试已保存，可导出结果");
 }
 
 function downsample(points, maxPoints) {
@@ -390,9 +479,12 @@ function renderSessions() {
     const item = document.createElement("button");
     item.className = "session-row";
     const date = new Date(session.createdAt);
+    const type = session.assessment || "strength";
     const sideSummary = session.mode === "dual" && Number.isFinite(session.leftPeak) ? `左 ${session.leftPeak.toFixed(1)} · 右 ${session.rightPeak.toFixed(1)} kg` : "峰值";
-    item.innerHTML = `<span><strong>${date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" })}</strong><small>${date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} · ${session.duration.toFixed(1)} 秒</small></span><span><strong>${session.peak.toFixed(1)} kg</strong><small>${sideSummary}</small></span>`;
-    item.addEventListener("click", () => showToast(`峰值 ${session.peak.toFixed(1)} kg · 冲量 ${session.impulse.toFixed(0)} N·s`));
+    const result = type === "cmj" ? `${(session.jumpHeightCm || 0).toFixed(1)} cm` : type === "repeat" ? `${session.jumpCount || 0} 跳` : `${session.peak.toFixed(1)} kg`;
+    const resultLabel = type === "cmj" ? `CMJ · RSImod ${(session.rsiMod || 0).toFixed(2)}` : type === "repeat" ? `最佳 RSI ${(session.bestRsi || 0).toFixed(2)}` : sideSummary;
+    item.innerHTML = `<span><strong>${date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" })}</strong><small>${date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} · ${session.duration.toFixed(1)} 秒</small></span><span><strong>${result}</strong><small>${resultLabel}</small></span>`;
+    item.addEventListener("click", () => showToast(type === "cmj" ? `跳高 ${(session.jumpHeightCm || 0).toFixed(1)} cm · 滞空 ${Math.round(session.flightTimeMs || 0)} ms` : type === "repeat" ? `${session.jumpCount || 0} 跳 · 最佳 RSI ${(session.bestRsi || 0).toFixed(2)}` : `峰值 ${session.peak.toFixed(1)} kg · 冲量 ${session.impulse.toFixed(0)} N·s`));
     els.sessions.appendChild(item);
   });
 }
@@ -456,6 +548,8 @@ async function buildResultImage() {
   }
   const summary = calculateMetrics(points);
   const reportMode = state.recording || !state.lastCompletedSamples.length ? state.selectedMode : state.lastCompletedMode;
+  const reportAssessment = state.recording || !state.lastCompletedSamples.length ? state.assessment : state.lastCompletedAssessment;
+  const jumpAnalysis = analyzeJumps(points);
   const reportDate = state.lastCompletedAt || new Date();
   const canvas = document.createElement("canvas");
   canvas.width = 1400;
@@ -491,21 +585,37 @@ async function buildResultImage() {
   ctx.fill();
   ctx.fillStyle = "#91a8cf";
   ctx.font = "600 26px system-ui, sans-serif";
-  ctx.fillText("测试模式", 112, 292);
+  ctx.fillText("测试类型", 112, 292);
   ctx.fillStyle = "#ffffff";
   ctx.font = "900 54px system-ui, sans-serif";
-  ctx.fillText(reportMode === "dual" ? "双机 · 左右脚" : "单机力量测试", 112, 363);
+  const assessmentName = reportAssessment === "cmj" ? "CMJ 反向纵跳" : reportAssessment === "repeat" ? "连续纵跳" : "力量测试";
+  ctx.fillText(assessmentName, 112, 363);
   ctx.textAlign = "right";
   ctx.fillStyle = "#91a8cf";
   ctx.font = "500 28px system-ui, sans-serif";
-  ctx.fillText(`持续 ${summary.duration.toFixed(2)} 秒`, 1286, 337);
+  ctx.fillText(`${reportMode === "dual" ? "双机" : "单机"} · ${summary.duration.toFixed(2)} 秒`, 1286, 337);
   ctx.textAlign = "left";
 
   const unit = displayUnit();
-  drawReportMetric(ctx, 74, 446, 602, "峰值力", `${displayValue(summary.peak).toFixed(1)} ${unit}`, "#f2385a");
-  drawReportMetric(ctx, 724, 446, 602, "平均力", `${displayValue(summary.mean).toFixed(1)} ${unit}`, "#3977ff");
-  drawReportMetric(ctx, 74, 644, 602, "冲量", `${summary.impulse.toFixed(0)} N·s`, "#3977ff");
-  drawReportMetric(ctx, 724, 644, 602, "最大 RFD", `${summary.rfd.toFixed(0)} N/s`, "#f2385a");
+  if (reportAssessment === "cmj") {
+    const cmj = jumpAnalysis.cmj;
+    drawReportMetric(ctx, 74, 446, 602, "跳跃高度", cmj ? `${(cmj.jumpHeightM * 100).toFixed(1)} cm` : "未识别", "#f2385a");
+    drawReportMetric(ctx, 724, 446, 602, "滞空时间", cmj ? `${Math.round(cmj.flightTime * 1000)} ms` : "未识别", "#3977ff");
+    drawReportMetric(ctx, 74, 644, 602, "起跳用时", cmj?.timeToTakeoff ? `${Math.round(cmj.timeToTakeoff * 1000)} ms` : "未识别", "#3977ff");
+    drawReportMetric(ctx, 724, 644, 602, "RSImod", cmj?.rsiMod ? `${cmj.rsiMod.toFixed(2)} m/s` : "未识别", "#f2385a");
+  } else if (reportAssessment === "repeat") {
+    const heights = jumpAnalysis.jumps.map((jump) => jump.jumpHeightM * 100);
+    const rsiValues = jumpAnalysis.jumps.map((jump) => jump.rsi).filter(Number.isFinite);
+    drawReportMetric(ctx, 74, 446, 602, "有效跳数", `${jumpAnalysis.jumps.length} 跳`, "#f2385a");
+    drawReportMetric(ctx, 724, 446, 602, "最佳高度", heights.length ? `${Math.max(...heights).toFixed(1)} cm` : "未识别", "#3977ff");
+    drawReportMetric(ctx, 74, 644, 602, "平均高度", heights.length ? `${(heights.reduce((sum, value) => sum + value, 0) / heights.length).toFixed(1)} cm` : "未识别", "#3977ff");
+    drawReportMetric(ctx, 724, 644, 602, "最佳 RSI", rsiValues.length ? `${Math.max(...rsiValues).toFixed(2)} m/s` : "未识别", "#f2385a");
+  } else {
+    drawReportMetric(ctx, 74, 446, 602, "峰值力", `${displayValue(summary.peak).toFixed(1)} ${unit}`, "#f2385a");
+    drawReportMetric(ctx, 724, 446, 602, "平均力", `${displayValue(summary.mean).toFixed(1)} ${unit}`, "#3977ff");
+    drawReportMetric(ctx, 74, 644, 602, "冲量", `${summary.impulse.toFixed(0)} N·s`, "#3977ff");
+    drawReportMetric(ctx, 724, 644, 602, "最大 RFD", `${summary.rfd.toFixed(0)} N/s`, "#f2385a");
+  }
 
   const chartX = 74;
   const chartY = 886;
@@ -674,10 +784,37 @@ function updateDashboard(now = 0) {
   els.unit.textContent = unit;
   const active = state.recording ? state.sessionSamples : state.samples.slice(-5000);
   const metrics = calculateMetrics(active);
-  els.peak.textContent = `${displayValue(metrics.peak).toFixed(1)} ${unit}`;
-  els.mean.textContent = `${displayValue(metrics.mean).toFixed(1)} ${unit}`;
-  els.impulse.textContent = `${metrics.impulse.toFixed(0)} N·s`;
-  els.rfd.textContent = `${metrics.rfd.toFixed(0)} N/s`;
+  if (state.assessment === "strength") {
+    els.peak.textContent = `${displayValue(metrics.peak).toFixed(1)} ${unit}`;
+    els.mean.textContent = `${displayValue(metrics.mean).toFixed(1)} ${unit}`;
+    els.impulse.textContent = `${metrics.impulse.toFixed(0)} N·s`;
+    els.rfd.textContent = `${metrics.rfd.toFixed(0)} N/s`;
+  } else {
+    const jumpSource = state.recording ? state.sessionSamples : state.lastCompletedAssessment === state.assessment ? state.lastCompletedSamples : [];
+    if (now - state.lastJumpAnalysisAt >= 180 || state.lastJumpAnalysisAt === 0) {
+      state.jumpAnalysis = analyzeJumps(jumpSource);
+      state.lastJumpAnalysisAt = now;
+    }
+    const analysis = state.jumpAnalysis;
+    if (state.assessment === "cmj") {
+      const cmj = analysis.cmj;
+      els.peak.textContent = cmj ? `${(cmj.jumpHeightM * 100).toFixed(1)} cm` : "—";
+      els.mean.textContent = cmj ? `${Math.round(cmj.flightTime * 1000)} ms` : "—";
+      els.impulse.textContent = cmj?.timeToTakeoff ? `${Math.round(cmj.timeToTakeoff * 1000)} ms` : "—";
+      els.rfd.textContent = cmj?.rsiMod ? `${cmj.rsiMod.toFixed(2)} m/s` : "—";
+    } else {
+      const heights = analysis.jumps.map((jump) => jump.jumpHeightM * 100);
+      const rsiValues = analysis.jumps.map((jump) => jump.rsi).filter(Number.isFinite);
+      els.peak.textContent = `${analysis.jumps.length}`;
+      els.mean.textContent = heights.length ? `${Math.max(...heights).toFixed(1)} cm` : "—";
+      els.impulse.textContent = heights.length ? `${(heights.reduce((sum, value) => sum + value, 0) / heights.length).toFixed(1)} cm` : "—";
+      els.rfd.textContent = rsiValues.length ? `${Math.max(...rsiValues).toFixed(2)} m/s` : "—";
+    }
+    if (state.renderedJumpCount !== analysis.jumps.length) {
+      renderJumpResults(analysis);
+      state.renderedJumpCount = analysis.jumps.length;
+    }
+  }
   const dual = state.selectedMode === "dual";
   const hardwareDual = state.currentMode === "dual";
   els.forceLabel.textContent = dual ? "实时合力" : "实时力";
@@ -760,6 +897,9 @@ function drawChart() {
 els.connect.addEventListener("click", () => state.connected ? disconnectDevice() : connectDevice());
 els.singleMode.addEventListener("click", () => setTestMode("single"));
 els.dualMode.addEventListener("click", () => setTestMode("dual"));
+els.strengthTest.addEventListener("click", () => setAssessment("strength"));
+els.cmjTest.addEventListener("click", () => setAssessment("cmj"));
+els.repeatJumpTest.addEventListener("click", () => setAssessment("repeat"));
 els.demo.addEventListener("click", () => state.demo ? (stopDemo(), setStatus("idle", "等待连接"), els.demoPill.hidden = true) : startDemo());
 els.start.addEventListener("click", toggleRecording);
 els.tare.addEventListener("click", tare);
@@ -790,4 +930,5 @@ window.addEventListener("beforeunload", () => stopDemo());
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").catch(() => {});
 renderSessions();
 setTestMode(state.selectedMode, false);
+setAssessment(state.assessment, false);
 updateDashboard();
