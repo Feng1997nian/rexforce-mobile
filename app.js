@@ -116,6 +116,10 @@ function consumeEvents(events) {
   }
 }
 
+function startButtonLabel() {
+  return state.assessment === "cmj" ? "开始 CMJ" : state.assessment === "repeat" ? "开始连续跳" : "开始测试";
+}
+
 function resetStreamState() {
   state.parser.reset();
   state.samples = [];
@@ -136,7 +140,7 @@ function resetStreamState() {
   state.lastFilterTs = null;
   state.currentMode = "single";
   state.hasReceivedData = false;
-  els.start.textContent = "开始测试";
+  els.start.textContent = startButtonLabel();
   els.start.classList.remove("recording");
 }
 
@@ -184,7 +188,7 @@ function setAssessment(type, announce = true) {
   if (type === "strength") {
     els.testHelp.textContent = "记录实时力量、峰值、平均力、冲量与最大 RFD。";
     [els.peakLabel.textContent, els.meanLabel.textContent, els.impulseLabel.textContent, els.rfdLabel.textContent] = ["峰值力", "平均力", "冲量", "最大 RFD"];
-    els.start.textContent = "开始测试";
+    els.start.textContent = startButtonLabel();
   } else if (type === "cmj") {
     els.testHelp.textContent = "开始后安静站立约 1 秒，再完成一次最大努力反向纵跳。";
     [els.peakLabel.textContent, els.meanLabel.textContent, els.impulseLabel.textContent, els.rfdLabel.textContent] = ["跳跃高度", "滞空时间", "起跳用时", "RSImod"];
@@ -416,7 +420,7 @@ function toggleRecording() {
 
 function finishRecording() {
   state.recording = false;
-  els.start.textContent = state.assessment === "cmj" ? "开始 CMJ" : state.assessment === "repeat" ? "开始连续跳" : "开始测试";
+  els.start.textContent = startButtonLabel();
   els.start.classList.remove("recording");
   if (state.sessionSamples.length < 2) return;
   state.lastCompletedSamples = state.sessionSamples.slice();
